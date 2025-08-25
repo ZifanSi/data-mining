@@ -11,7 +11,8 @@ python fp_growth.py db/tx.json
 # custom minsup (e.g., 0.6)
 python fp_growth.py db/tx.json 0.6
 
-
+# K mean
+python kmeans_1d.py db/k.json 3
 
 # Case (a): good init near natural clusters
 python kmeans_1d.py db/t_kmeans_1d.csv 3 --init 1,11,28
