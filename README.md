@@ -2,6 +2,7 @@ python utils/descriptive_stats.py db/age_freq.json
 
 
 
+python pattern/rule_measures.py db/rules.json
 
 # default minsup=0.5, minconf=0.7
 python apriori.py db/tx.json
