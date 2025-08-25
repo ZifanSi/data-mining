@@ -1,68 +1,52 @@
-import sys, math
-from collections import Counter, defaultdict
-
-def read_txns(path):
-    with open(path) as f:
-        return [line.strip().split(",") for line in f if line.strip()]
-
-def minsup_count(minsup, n):
-    return int(math.ceil(minsup*n)) if 0 < minsup <= 1 else int(minsup)
+import json,sys,math
+from collections import Counter
 
 class Node:
-    def __init__(self, item, parent):
-        self.item, self.count, self.parent = item, 1, parent
-        self.children, self.next = {}, None
+    def __init__(s,i,p): s.item,s.count,s.parent=i,1,p; s.children,s.next={},None
 
-def build_tree(txns, minsup):
-    counts = Counter(i for t in txns for i in set(t))
-    items = [i for i,c in counts.items() if c >= minsup]
-    order = {i: idx for idx,i in enumerate(sorted(items, key=lambda i:(-counts[i], i)))}
-    header = {i: None for i in items}
-    root = Node(None,None)
-
+def build_tree(txns,m):
+    c=Counter(i for t in txns for i in set(t))
+    it=[i for i,v in c.items() if v>=m]
+    o={i:j for j,i in enumerate(sorted(it,key=lambda x:(-c[x],x)))}
+    h={i:None for i in it}; r=Node(None,None)
     for t in txns:
-        filt = [i for i in t if i in items]
-        filt.sort(key=lambda i: order[i])
-        node = root
-        for i in filt:
-            if i not in node.children:
-                child = Node(i,node); node.children[i]=child
-                # link header
-                if header[i] is None: header[i]=child
+        f=sorted([i for i in t if i in it],key=lambda x:o[x]); n=r
+        for i in f:
+            if i not in n.children:
+                ch=Node(i,n); n.children[i]=ch
+                if not h[i]: h[i]=ch
                 else:
-                    cur=header[i]
+                    cur=h[i]
                     while cur.next: cur=cur.next
-                    cur.next=child
-            else: node.children[i].count+=1
-            node=node.children[i]
-    return root, header, order
+                    cur.next=ch
+            else: n.children[i].count+=1
+            n=n.children[i]
+    return r,h
 
-def ascend(node):
-    path=[]
-    while node.parent and node.parent.item:
-        node=node.parent; path.append(node.item)
-    return list(reversed(path))
+def ascend(n):
+    p=[]
+    while n.parent and n.parent.item:
+        n=n.parent; p.append(n.item)
+    return p[::-1]
 
-def mine(tree, header, minsup, prefix, results, n):
-    for item,node in header.items():
-        supp=0; cond_db=[]
+def mine(h,m,p,res,n):
+    for i,node in h.items():
+        s,db=0,[]
         cur=node
         while cur:
-            supp+=cur.count
-            for _ in range(cur.count):
-                cond_db.append(ascend(cur))
-            cur=cur.next
-        if supp>=minsup:
-            newp=prefix+[item]
-            results.append((newp,supp/n))
-            if cond_db:
-                r,h,_=build_tree(cond_db,minsup)
-                if h: mine(r,h,minsup,newp,results,n)
+            s+=cur.count; db+=[ascend(cur)]*cur.count; cur=cur.next
+        if s>=m:
+            newp=p+[i]; res.append((newp,s/n))
+            if db:
+                r,h2=build_tree(db,m)
+                if h2: mine(h2,m,newp,res,n)
 
 if __name__=="__main__":
-    path=sys.argv[1]; minsup=float(sys.argv[2])
-    txns=read_txns(path); n=len(txns); m=minsup_count(minsup,n)
-    r,h,o=build_tree(txns,m); results=[]
-    mine(r,h,m,[],results,n)
-    for items,supp in sorted(results,key=lambda x:(len(x[0]),x[0])):
-        print(f"{items} supp={supp:.2f}")
+    path=sys.argv[1]
+    minsup=float(sys.argv[2]) if len(sys.argv)>2 else 0.5
+    with open(path) as f:
+        tx=json.load(f)
+    n=len(tx); m=int(math.ceil(minsup*n))
+    r,h=build_tree([set(t) for t in tx],m); res=[]
+    mine(h,m,[],res,n)
+    print("Frequent:",res)
