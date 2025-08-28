@@ -19,3 +19,4 @@ python cluster/hier.py diana db/points.json --k 3
 
 BIRCH (radius=2.0):
 python cluster/hier.py birch db/points.json --radius 2.0
+python cluster\bicluster.py
