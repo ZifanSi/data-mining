@@ -9,3 +9,13 @@ python cluster/kmeans_1d.py db/k.json 3
 
 UTILS
 python utils/descriptive_stats.py db/age_freq.json
+
+AGNES (2 clusters, average-link):
+python cluster/hier.py agnes db/points.json --k 2 --link average
+
+
+DIANA (3 clusters):
+python cluster/hier.py diana db/points.json --k 3
+
+BIRCH (radius=2.0):
+python cluster/hier.py birch db/points.json --radius 2.0
