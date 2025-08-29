@@ -1,3 +1,12 @@
+/db
+db\distillation
+db\raw
+
+model
+models\classification
+models\cluster
+models\cluster
+
 PATTERN
 python pattern/apriori.py db/tx.json 0.4 0.6
 python pattern/fp_growth.py db/tx.json 0.6
@@ -26,3 +35,11 @@ python Classification/trees/c45.py db/id3.json label
 python Classification/trees/c50.py db/id3.json label
 // Uses Bayes’ Rule p(c|x)
 python Classification/naive_bayes.py db/t_employee.json department=systems status=junior age=26..30
+
+
+# single query
+python classification_models/nb_cli.py predict --model nb_employee.json --query department=systems status=junior age=26..30
+
+# batch (make sure db/queries.json exists)
+python classification_models/nb_cli.py predict --model nb_employee.json --batch db/queries.json
+python -m classification_models.naivebayes.nb_cli train db/t_employee.json --label salary

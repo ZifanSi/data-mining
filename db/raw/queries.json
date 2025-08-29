@@ -1,0 +1,5 @@
+[
+  {"department": "systems", "status": "junior", "age": "26..30"},
+  {"department": "sales", "status": "junior", "age": "31..35"},
+  {"department": "marketing", "status": "senior", "age": "36..40"}
+]
