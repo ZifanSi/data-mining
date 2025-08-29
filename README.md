@@ -21,7 +21,8 @@ BIRCH (radius=2.0):
 python cluster/hier.py birch db/points.json --radius 2.0
 python cluster\bicluster.py
 
-python Classification/id3.py db/id3.json label
-python Classification/c45.py db/id3.json label
-python Classification/c50.py db/id3.json label
+python Classification/trees/id3.py db/id3.json label
+python Classification/trees/c45.py db/id3.json label
+python Classification/trees/c50.py db/id3.json label
+// Uses Bayes’ Rule p(c|x)
 python Classification/naive_bayes.py db/t_employee.json department=systems status=junior age=26..30
