@@ -20,3 +20,8 @@ python cluster/hier.py diana db/points.json --k 3
 BIRCH (radius=2.0):
 python cluster/hier.py birch db/points.json --radius 2.0
 python cluster\bicluster.py
+
+python Classification/id3.py db/id3.json label
+python Classification/c45.py db/id3.json label
+python Classification/c50.py db/id3.json label
+python Classification/naive_bayes.py db/t_employee.json department=systems status=junior age=26..30
