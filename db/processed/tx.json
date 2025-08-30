@@ -1,0 +1,26 @@
+{
+  "transactions": 4,
+  "counts": {
+    "bread": 4,
+    "cheese": 3,
+    "crab": 2,
+    "milk": 3,
+    "breadcheese": 3,
+    "breadcrab": 2,
+    "breadmilk": 3,
+    "cheesecrab": 1,
+    "cheesemilk": 3,
+    "crabmilk": 1,
+    "apple": 2,
+    "pie": 2,
+    "applebread": 2,
+    "applecheese": 1,
+    "applemilk": 1,
+    "applepie": 2,
+    "breadpie": 2,
+    "cheesepie": 1,
+    "milkpie": 1,
+    "applecrab": 1,
+    "crabpie": 1
+  }
+}

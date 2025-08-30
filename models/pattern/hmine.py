@@ -1,8 +1,7 @@
-import json,sys,math
+import json, sys, math
 from collections import Counter
 
-def minsup_count(minsup,n):
-    return int(math.ceil(minsup*n)) if 0<minsup<=1 else int(minsup)
+def minsup_count(minsup,n): return int(math.ceil(minsup*n)) if 0<minsup<=1 else int(minsup)
 
 def prepare(txns,m):
     cnt=Counter(i for t in txns for i in set(t))
@@ -31,12 +30,13 @@ def hmine(txns,f_list,m,prefix,res,n):
         local_f=[i for i in f_list if i!=a and local_cnt.get(i,0)>=m]
         if local_f: hmine(proj,local_f,m,newp,res,n)
 
+def hmine_mine(transactions, minsup):
+    n=len(transactions); m=minsup_count(minsup,n)
+    prepped,f_list=prepare(transactions,m); res=[]
+    hmine(prepped,f_list,m,[],res,n)
+    return res
+
 if __name__=="__main__":
-    path=sys.argv[1]
-    minsup=float(sys.argv[2]) if len(sys.argv)>2 else 0.5
-    with open(path) as f:
-        tx=json.load(f)
-    n=len(tx); m=minsup_count(minsup,n)
-    prepped,f_list=prepare(tx,m); results=[]
-    hmine(prepped,f_list,m,[],results,n)
-    print("Frequent:",results)
+    path=sys.argv[1]; minsup=float(sys.argv[2]) if len(sys.argv)>2 else 0.5
+    with open(path) as f: tx=json.load(f)
+    print("Frequent:", hmine_mine(tx, minsup))
