@@ -1,14 +1,18 @@
 /db
-db\distillation
+db\processed
 db\raw
 
 model
 models\classification
 models\cluster
-models\cluster
+models\pattern
 
-PATTERN
-python pattern/apriori.py db/tx.json 0.4 0.6
+
+python start.py apriori db/raw/tx.json 0.4 0.6
+
+
+PATTERNmodels\pattern\apriori.py
+python models/pattern/apriori.py db/raw/tx.json 0.4 0.6
 python pattern/fp_growth.py db/tx.json 0.6
 python pattern/hmine.py db/tx.json 0.5
 python pattern/rule_measures.py db/rules.json
