@@ -7,15 +7,15 @@ models\classification
 models\cluster
 models\pattern
 
-
+// Mining
+python start.py hmine   db/raw/tx.json 0.4
+python start.py fp      db/raw/tx.json 0.4
 python start.py apriori db/raw/tx.json 0.4 0.6
 
+// Distillation
+python process/tx_norm.py db/raw/tx.json
 
-PATTERNmodels\pattern\apriori.py
-python models/pattern/apriori.py db/raw/tx.json 0.4 0.6
-python pattern/fp_growth.py db/tx.json 0.6
-python pattern/hmine.py db/tx.json 0.5
-python pattern/rule_measures.py db/rules.json
+
 
 CLUSTER
 python cluster/kmeans_1d.py db/k.json 3
