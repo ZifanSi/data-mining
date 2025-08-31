@@ -14,11 +14,11 @@ python start.py apriori db/raw/tx.json 0.4 0.6
 
 // Distillation
 python process/tx_norm.py db/raw/tx.json
-
+python process/tx_norm.py db/raw/tx.json
 
 
 CLUSTER
-python cluster/kmeans_1d.py db/k.json 3
+python models/cluster/kmeans_1d.py db/raw/k.json 3 
 
 UTILS
 python utils/descriptive_stats.py db/age_freq.json
@@ -41,9 +41,4 @@ python Classification/trees/c50.py db/id3.json label
 python Classification/naive_bayes.py db/t_employee.json department=systems status=junior age=26..30
 
 
-# single query
-python classification_models/nb_cli.py predict --model nb_employee.json --query department=systems status=junior age=26..30
 
-# batch (make sure db/queries.json exists)
-python classification_models/nb_cli.py predict --model nb_employee.json --batch db/queries.json
-python -m classification_models.naivebayes.nb_cli train db/t_employee.json --label salary
