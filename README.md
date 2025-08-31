@@ -1,35 +1,15 @@
-# Data Mining Toolkit
+# data-mining-analyser
 
-This project is an educational toolkit that implements classical data mining algorithms across three major categories: **pattern mining**, **clustering**, and **classification**. It provides both a command-line interface and a simple UI for selecting algorithms and running them on datasets.
+## Overview
+
+**data-mining-analyser** is a research-oriented framework for implementing and comparing classical data mining algorithms.  
+It focuses on **pattern mining, clustering, and classification**, and provides utilities for **data distillation** and **preprocessing** to transform raw data into processed datasets, reducing noise and improving analytical consistency.
 
 ---
 
 ## Features
 
-### Pattern Mining
-- Apriori (`apr`)
-- FP-Growth (`fp`)
-- Eclat (`ecl`)
-- H-Mine (`hm`)
-
-### Clustering
-- K-Means (`km`)
-- K-Medians (`kmed`)
-- K-Medoids / PAM (`pam`)
-- Agglomerative (AGNES) (`agnes`)
-- Divisive (DIANA) (`diana`)
-- Fuzzy C-Means (`fcm`)
-- Gaussian Mixture Models (EM) (`gmm`)
-- PCA for Dimensionality Reduction (`pca`)
-
-### Classification
-- Decision Trees: ID3 (`id3`), C4.5 (`c45`), C5.0 (`c50`)
-- Naïve Bayes (`nb`)
-- K-Nearest Neighbors (`knn`)
-- Perceptron (`perc`)
-- Logistic Regression (`logr`)
-- Linear Discriminant Analysis (LDA) (`lda`)
-- Support Vector Machines (SVM) (`svm`)
-
----
-
+- **Data Distillation & Preprocessing**: Raw → Processed datasets; noise reduction and normalization  
+- **Pattern Mining**: Apriori, FP-Growth, Eclat, H-Mine  
+- **Clustering**: K-Means, K-Medians, PAM (K-Medoids), Hierarchical (AGNES, DIANA), Fuzzy C-Means, Gaussian Mixture Models (EM), PCA, Bi-Clustering  
+- **Classification**: ID3, C4.5, C5.0, Naive Bayes, K-Nearest Neighbors, Perceptron, Logistic Regression, Linear Discriminant Analysis (LDA), Support Vector Machines (SVM)
