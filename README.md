@@ -1,4 +1,4 @@
-# data-mining-analyser
+# data-mining-toolkit
 
 ## Overview
 
