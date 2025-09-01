@@ -2,13 +2,13 @@
 
 ## Overview
 
-data-mining-analyser is a framework for experimenting with data mining algorithms.  
+**data-mining-toolkit** is a framework for experimenting with and prototyping data mining algorithms.  
 It provides tools for pattern mining, clustering, and classification, plus utilities for cleaning and preprocessing.  
 The goal is to turn raw and noisy JSON queries from databases into distilled key information for machine learning.
 
 ---
 UI preview  
-![UI Screenshot](ui/img/ui.png)
+![UI Screenshot](app/img/ui.png)
 
 ## Features
 
@@ -22,3 +22,12 @@ UI preview
 | Visualization   | Plots for clusters, decision trees, association rules, metrics          |
 | Export          | Save models, results, and processed datasets (JSON, CSV, Excel)         |
 
+## Quick Start
+
+### Install
+```bash
+git clone https://github.com/ZifanSi/data-mining-toolkit.git
+cd data-mining
+
+# install dependencies
+pip install -r requirements.txt
