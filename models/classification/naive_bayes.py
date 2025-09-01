@@ -1,157 +1,245 @@
-#!/usr/bin/env python3
-import json, sys, math, collections, argparse
+# models/classification/naive_bayes.py
+import sys, json, math, argparse
+from collections import defaultdict, Counter
+from typing import Any, Dict, Iterable, List, Tuple, Optional, Union
 
-# ---------- core ----------
-def _w(r):
-    try: return int(r.get("count", 1))
-    except: return 0
+Number = Union[int, float]
 
-def train_tabular(rows, target, features, alpha=1.0):
-    cls_counts = collections.Counter(); N = 0
-    for r in rows:
-        w = _w(r)
-        cls_counts[r[target]] += w; N += w
-    logpri = {y: math.log(cls_counts[y] / N) for y in cls_counts}
+# ---------- utils: flatten + numeric helpers ----------
+def _is_number_like(x: Any) -> bool:
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return True
+    if isinstance(x, str):
+        try:
+            float(x.strip())
+            return True
+        except ValueError:
+            return False
+    return False
 
-    vocab = {f: set() for f in features}
-    cond  = {f: {y: collections.Counter() for y in cls_counts} for f in features}
-    totals= {f: {y: 0 for y in cls_counts} for f in features}
+def _to_number(x: Any) -> Optional[Number]:
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        return float(x)
+    if isinstance(x, str):
+        try:
+            return float(x.strip())
+        except ValueError:
+            return None
+    return None
 
-    for r in rows:
-        y = r[target]; w = _w(r)
-        for f in features:
-            v = r.get(f, None)
-            vocab[f].add(v)
-            cond[f][y][v] += w
-            totals[f][y] += w
+def _flatten(prefix: str, value: Any, out: Dict[str, Any]) -> None:
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _flatten(f"{prefix}.{k}" if prefix else k, v, out)
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            _flatten(f"{prefix}[{i}]" if prefix else f"[{i}]", v, out)
+    else:
+        if prefix:  # ignore empty top-level if someone passes a scalar
+            out[prefix] = value
 
-    loglik = {f: {y: {} for y in cls_counts} for f in features}
-    unk = {}
-    for f in features:
-        V = max(len(vocab[f]), 1)
-        for y in cls_counts:
-            denom = totals[f][y] + alpha * V
-            loglik[f][y] = {v: math.log((cond[f][y][v] + alpha) / denom) for v in vocab[f]}
-            unk[(f, y)] = math.log(alpha / denom)
+def flatten_json(obj: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    _flatten("", obj, out)
+    return out
 
-    return {
-        "target": target, "features": features,
-        "logpri": logpri, "loglik": loglik,
-        "vocab": {f: sorted(list(v)) for f, v in vocab.items()},
-        "unk": {f"{f}|{y}": v for (f, y), v in unk.items()},
-        "class_counts": dict(cls_counts), "N": N, "alpha": alpha
-    }
+# ---------- model ----------
+class NaiveBayesJSON:
+    """
+    General Naive Bayes for arbitrary JSON records.
+    - Auto-detects feature types (numeric/categorical)
+    - Categorical: Laplace smoothing
+    - Numeric: Gaussian likelihood with variance floor
+    - Supports per-sample weights
+    """
+    def __init__(self, laplace: float = 1.0, var_floor: float = 1e-9):
+        self.laplace = laplace
+        self.var_floor = var_floor
+        self.classes_: List[Any] = []
+        self.class_weight_: Counter = Counter()
+        self.n_weight_: float = 0.0
 
-def predict(model, x):
-    def unk_log(f,y): return model["unk"][f"{f}|{y}"]
-    scores, contribs = {}, {}
-    for y in model["logpri"]:
-        s = model["logpri"][y]; contribs[y] = {"<PRIOR>": s}
-        for f in model["features"]:
-            v = x.get(f, None)
-            term = model["loglik"][f][y].get(v, unk_log(f,y))
-            s += term; contribs[y][f] = term
-        scores[y] = s
-    yhat = max(scores, key=scores.get)
-    m = max(scores.values())
-    probs = {y: math.exp(scores[y]-m) for y in scores}
-    Z = sum(probs.values()) or 1.0
-    probs = {y: probs[y]/Z for y in probs}
-    return yhat, probs, contribs
+        self.feature_types_: Dict[str, str] = {}  # 'categorical' | 'numeric'
+        self.cat_counts_: Dict[str, Dict[Any, Counter]] = defaultdict(lambda: defaultdict(Counter))
+        self.cat_totals_: Dict[str, Dict[Any, float]] = defaultdict(lambda: defaultdict(float))
+        self.cat_cardinality_: Dict[str, int] = {}
 
-def autodetect_schema(rows):
-    keys = set().union(*(r.keys() for r in rows))
-    tgt = "department" if "department" in keys else None
-    if not tgt:
-        for k in keys:
-            if k == "count": continue
-            if any(isinstance(r.get(k), str) for r in rows): tgt = k; break
-    tgt = tgt or next((k for k in keys if k != "count"), "label")
-    feats = [k for k in keys if k not in (tgt, "count")]; feats.sort()
-    return tgt, feats
+        # numeric params: feature -> class -> (mean, var, weight_sum)
+        self.num_params_: Dict[str, Dict[Any, Tuple[float, float, float]]] = defaultdict(dict)
+        self.log_priors_: Dict[Any, float] = {}
+        self._feat_numeric_votes_: Counter = Counter()
+        self._feat_total_votes_: Counter = Counter()
 
-# ---------- printing ----------
-def pct(x): return f"{100.0*x:.2f}%"
+    def _decide_feature_types(self):
+        for feat, total in self._feat_total_votes_.items():
+            num_votes = self._feat_numeric_votes_[feat]
+            self.feature_types_[feat] = 'numeric' if num_votes >= (total - num_votes) else 'categorical'
 
-def print_summary(rows, model):
-    total_weight = sum(_w(r) for r in rows)
-    print("# Dataset")
-    print(f"- Groups: {len(rows)}")
-    print(f"- Weighted samples: {total_weight}")
-    print(f"- Target: {model['target']}")
-    print(f"- Features: {', '.join(model['features'])}\n")
+    def fit(
+        self,
+        X: Iterable[Dict[str, Any]],
+        y: Iterable[Any],
+        sample_weight: Optional[Iterable[float]] = None
+    ):
+        X = list(X)
+        y = list(y)
+        if sample_weight is None:
+            sample_weight = [1.0] * len(X)
+        else:
+            sample_weight = [float(w) for w in sample_weight]
 
-    print("# Class Priors")
-    N = model["N"]
-    for y,c in sorted(model["class_counts"].items(), key=lambda kv:(-kv[1], kv[0])):
-        p = c/N if N else 0.0
-        print(f"- {y}: count={c} prior={p:.6f} ({pct(p)})")
-    print()
+        flat_X = [flatten_json(rec) for rec in X]
 
-    print("# Feature Cardinality")
-    for f in model["features"]:
-        print(f"- {f}: |V|={len(model['vocab'][f])}")
-    print()
+        # vote feature types
+        for feat_row in flat_X:
+            for k, v in feat_row.items():
+                self._feat_total_votes_[k] += 1
+                if _is_number_like(v):
+                    self._feat_numeric_votes_[k] += 1
+        self._decide_feature_types()
 
-def print_small_checks(rows, target, features):
-    bad_count = sum(1 for r in rows if not isinstance(r.get("count",1), (int,float)) or _w(r) <= 0)
-    keys = [target] + features
-    sig = collections.Counter(tuple((k, r.get(k,None)) for k in keys) for r in rows)
-    dups = sum(1 for c in sig.values() if c > 1)
-    print("# Quick Checks")
-    print(f"- Rows with invalid/nonpositive count: {bad_count}")
-    print(f"- Duplicate groups (same {keys}): {dups}\n")
+        # accumulate per-class stats
+        num_stats: Dict[str, Dict[Any, List[float]]] = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
+        cat_vocab: Dict[str, set] = defaultdict(set)
 
-def print_prediction(model, x, yhat, probs, contribs, topk=None):
-    print("# Prediction")
-    print(f"- Input: {json.dumps(x)}")
-    print(f"- Predicted: {yhat}\n")
-    print("# Probabilities")
-    items = sorted(probs.items(), key=lambda kv: -kv[1])
-    if topk: items = items[:topk]
-    for y,p in items:
-        print(f"- {y}: {p:.6f} ({pct(p)})")
-    print("\n# Explanation (log-score terms)")
-    parts = contribs[yhat]
-    print(f"- <PRIOR>: {parts['<PRIOR>']:.6f}")
-    for f in model["features"]:
-        v = x.get(f, None)
-        used = "seen" if v in model["loglik"][f][yhat] else "UNK"
-        print(f"- {f}={v} ({used}): {parts[f]:.6f}")
+        for feat_row, cls, w in zip(flat_X, y, sample_weight):
+            self.class_weight_[cls] += w
+            self.n_weight_ += w
 
-# ---------- cli ----------
+            for k, v in feat_row.items():
+                if self.feature_types_[k] == 'numeric':
+                    val = _to_number(v)
+                    if val is None:
+                        continue
+                    s = num_stats[k][cls]  # [sum, sumsq, wsum]
+                    s[0] += w * val
+                    s[1] += w * (val * val)
+                    s[2] += w
+                else:
+                    sval = str(v)
+                    self.cat_counts_[k][cls][sval] += w
+                    self.cat_totals_[k][cls] += w
+                    cat_vocab[k].add(sval)
+
+        # finalize
+        self.classes_ = list(self.class_weight_.keys())
+        self.log_priors_ = {c: math.log(self.class_weight_[c] / self.n_weight_) for c in self.classes_}
+
+        for feat, by_class in num_stats.items():
+            for cls, (sum_, sumsq, wsum) in by_class.items():
+                if wsum <= 0:
+                    continue
+                mean = sum_ / wsum
+                var = max((sumsq / wsum) - (mean * mean), self.var_floor)
+                self.num_params_[feat][cls] = (mean, var, wsum)
+
+        for feat, vocab in cat_vocab.items():
+            self.cat_cardinality_[feat] = max(1, len(vocab))
+
+        return self
+
+    def _log_gauss(self, x: float, mean: float, var: float) -> float:
+        return -0.5 * (math.log(2 * math.pi * var) + ((x - mean) ** 2) / var)
+
+    def predict_proba_one(self, rec: Dict[str, Any]) -> Dict[Any, float]:
+        flat = flatten_json(rec)
+        logp = {c: self.log_priors_[c] for c in self.classes_}
+
+        for feat, ftype in self.feature_types_.items():
+            if feat not in flat:
+                continue
+
+            if ftype == 'numeric':
+                x = _to_number(flat[feat])
+                if x is None:  # incompatible type -> ignore
+                    continue
+                for c in self.classes_:
+                    params = self.num_params_.get(feat, {}).get(c)
+                    if not params:
+                        continue
+                    mean, var, _ = params
+                    logp[c] += self._log_gauss(x, mean, var)
+            else:
+                sval = str(flat[feat])
+                V = self.cat_cardinality_.get(feat, 1)
+                for c in self.classes_:
+                    count = self.cat_counts_[feat][c][sval]
+                    total = self.cat_totals_[feat][c]
+                    # Laplace smoothing
+                    if total > 0:
+                        prob = (count + 1.0) / (total + V * 1.0)
+                    else:
+                        prob = 1.0 / V
+                    logp[c] += math.log(prob)
+
+        # normalize
+        m = max(logp.values())
+        exps = {c: math.exp(v - m) for c, v in logp.items()}
+        Z = sum(exps.values()) or 1.0
+        return {c: exps[c] / Z for c in self.classes_}
+
+    def predict_proba(self, X: Iterable[Dict[str, Any]]) -> List[Dict[Any, float]]:
+        return [self.predict_proba_one(r) for r in X]
+
+# ---------- io helpers ----------
+def load_records(path: str) -> List[Dict[str, Any]]:
+    # try JSON array; fallback to JSONL
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        raise ValueError("Top-level JSON must be a list of objects.")
+    except json.JSONDecodeError:
+        recs = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    recs.append(json.loads(line))
+        return recs
+
+# ---------- CLI ----------
 def main():
-    # avoid unicode issues on Windows consoles
-    try: sys.stdout.reconfigure(encoding="utf-8")
-    except: pass
-
-    ap = argparse.ArgumentParser(description="Simple, practical NB for categorical tables with 'count' weights.")
-    ap.add_argument("path")
-    ap.add_argument("--target")
-    ap.add_argument("--features")
-    ap.add_argument("--alpha", type=float, default=1.0)
-    ap.add_argument("--predict", help='JSON, e.g. {"status":"junior","age":"26..30","salary":"26K..30K"}')
-    ap.add_argument("--topk", type=int, default=0, help="Show top-K classes in probability output (0=all)")
+    ap = argparse.ArgumentParser(
+        description="General Naive Bayes for arbitrary JSON records. Outputs pure probabilities."
+    )
+    ap.add_argument("train", help="Training JSON/JSONL (list of objects)")
+    ap.add_argument("predict", nargs="?", help="Prediction JSON/JSONL (optional; defaults to training set)")
+    ap.add_argument("--target", default="target", help="Name of label field in records (default: target)")
+    ap.add_argument("--weight", default=None, help="Optional weight field (e.g., count)")
+    ap.add_argument("--laplace", type=float, default=1.0, help="Laplace smoothing for categorical (default 1.0)")
+    ap.add_argument("--var_floor", type=float, default=1e-9, help="Variance floor for numeric (default 1e-9)")
     args = ap.parse_args()
 
-    rows = json.load(open(args.path, "r", encoding="utf-8"))
-    target, features = (args.target, None)
-    if not target or not args.features:
-        auto_t, auto_f = autodetect_schema(rows)
-        target = target or auto_t
-        features = auto_f if not args.features else [s for s in args.features.split(",") if s]
+    train = load_records(args.train)
+    if not train:
+        print("[]")
+        return
+
+    # labels
+    if not all(isinstance(r, dict) and (args.target in r) for r in train):
+        sys.stderr.write(f"ERROR: training records must include '{args.target}'.\n")
+        sys.exit(1)
+
+    y = [r[args.target] for r in train]
+    X = [{k: v for k, v in r.items() if k != args.target} for r in train]
+
+    # sample weights
+    if args.weight is not None:
+        w = [float(r.get(args.weight, 1.0)) for r in train]
     else:
-        features = [s for s in args.features.split(",") if s]
-    if target in features: features = [f for f in features if f != target]
+        w = None
 
-    model = train_tabular(rows, target, features, alpha=args.alpha)
-    print_summary(rows, model)
-    print_small_checks(rows, target, features)
+    nb = NaiveBayesJSON(laplace=args.laplace, var_floor=args.var_floor).fit(X, y, sample_weight=w)
 
-    if args.predict:
-        x = json.loads(args.predict)
-        yhat, probs, contribs = predict(model, x)
-        print_prediction(model, x, yhat, probs, contribs, topk=(args.topk or None))
+    # prediction set
+    pred_set = load_records(args.predict) if args.predict else X
+    probs_list = nb.predict_proba(pred_set)
+
+    # pure probabilities, one JSON per line
+    for probs in probs_list:
+        print(json.dumps(probs, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()
