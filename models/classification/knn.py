@@ -35,6 +35,20 @@ def _edit_ratio(a: str, b: str) -> float:
     L = max(len(a), len(b), 1)
     return _levenshtein(a, b) / L  # 0 identical .. 1 very different
 
+def _letters(s: str) -> str:
+    return "".join(ch for ch in (s or "") if ch.isalpha()).lower()
+
+def _is_subseq(short: str, long: str) -> bool:
+    """Return True iff all chars of `short` appear in order in `long`."""
+    it = iter(long)
+    for c in short:
+        for L in it:
+            if L == c:
+                break
+        else:
+            return False
+    return True
+
 # ====================== count coercion ======================
 _WORD = {"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,
          "seven":7,"eight":8,"nine":9,"ten":10}
@@ -77,27 +91,38 @@ class KNNMajority:
                                 if self.freq else None)
 
     def predict(self, token: Any) -> Optional[str]:
+        """
+        Canonicalize even if the token itself exists in the vocab:
+        - Prefer close neighbors (edit distance)
+        - Recognize abbreviations (e.g., mktg -> marketing, jr -> junior)
+        - Break ties by global frequency, then prefer LONGER tokens (full words)
+        """
         q = _norm_token(token)
         if not q:
-            return self.global_majority if self.null_policy=="majority" else "unknown"
-        if q in self.freq:
-            return q
+            return self.global_majority if self.null_policy == "majority" else "unknown"
         if not self.vocab:
             return None
-        # gather neighbors within threshold
+
+        q_letters = _letters(q)
         cand = []
         for v in self.vocab:
             r = _edit_ratio(q, v)
-            if r <= self.max_edit_ratio:
-                cand.append((r, v))
+            allow_abbrev = len(q_letters) <= 4 and _is_subseq(q_letters, _letters(v))
+            if r <= self.max_edit_ratio or allow_abbrev:
+                # Give abbreviation matches a slight distance advantage
+                cand.append((r if not allow_abbrev else 0.34, v))
+
         if not cand:
-            # fallback to nearest even if above threshold
+            # fallback: nearest even if above threshold
             vbest = min(self.vocab, key=lambda v: _edit_ratio(q, v))
             return vbest
-        cand.sort(key=lambda rv: (rv[0], -self.freq.get(rv[1],0), rv[1]))
-        neighbors = [v for _,v in cand[:self.k]]
-        # vote weighted by global frequency
-        best = max(neighbors, key=lambda v: (self.freq.get(v,0), -len(v)))
+
+        # sort by: distance asc, frequency desc, LONGER tokens first, then lexicographic
+        cand.sort(key=lambda rv: (rv[0], -self.freq.get(rv[1], 0), -len(rv[1]), rv[1]))
+        neighbors = [v for _, v in cand[:self.k]]
+
+        # weighted majority by global frequency; tie-break to longer token
+        best = max(neighbors, key=lambda v: (self.freq.get(v, 0), len(v), v))
         return best
 
 # ====================== numeric parsing / binning ======================
@@ -111,11 +136,11 @@ def parse_numeric_or_range(value: Any) -> Optional[Tuple[float,float]]:
     if not s: return None
     s = s.replace("~","..").replace("to","..").replace("—","..").replace("–","..")
     nums = _to_ints(s)
-    # handle trailing/leading k
+    # handle trailing/leading k (45k -> 45000)
     if re.search(r"\bk\b", s):
         nums = [n*1000 for n in nums]
     if not nums: return None
-    if len(nums)==1:
+    if len(nums) == 1:
         n = float(nums[0])
         return (n, n)
     lo, hi = float(min(nums[0], nums[1])), float(max(nums[0], nums[1]))
@@ -129,19 +154,19 @@ def compute_bins(values: List[Tuple[float,float]], strategy:str="quantile", bins
     """
     if not values: return [0.0, 1.0]
     mids = sorted((lo+hi)/2.0 for lo,hi in values)
-    if strategy=="width":
+    if strategy == "width":
         lo, hi = float(min(mids)), float(max(mids))
         if hi <= lo: hi = lo + 1.0
-        step = (hi-lo)/bins
+        step = (hi - lo) / bins
         return [lo + i*step for i in range(bins)] + [hi]
     # quantile
-    edges = [mids[int(round(len(mids)*q)) - 1 if int(round(len(mids)*q))>0 else 0]
+    edges = [mids[int(round(len(mids)*q)) - 1 if int(round(len(mids)*q)) > 0 else 0]
              for q in [i/bins for i in range(1, bins)]]
     return [mids[0]] + edges + [mids[-1]]
 
 def label_bin(n: float, edges: List[float], suffix:str="") -> str:
     for i in range(len(edges)-1):
-        if n <= edges[i+1] or i==len(edges)-2:
+        if n <= edges[i+1] or i == len(edges)-2:
             lo, hi = edges[i], edges[i+1]
             if abs(hi) >= 1000 or abs(lo) >= 1000:
                 return f"{int(round(lo/1000))}K..{int(round(hi/1000))}K" + suffix
@@ -154,7 +179,7 @@ def is_numericish(v: Any) -> bool:
     if isinstance(v, (int,float)): return True
     s = _norm_str(v).lower()
     if not s: return False
-    # FIX: if any letters exist, treat as non-numeric
+    # if any letters exist, treat as non-numeric (we rely on parse success later)
     if any(c.isalpha() for c in s):
         return False
     return bool(_to_ints(s))
@@ -172,29 +197,54 @@ def infer_field_roles(rows: List[Dict[str,Any]],
     keys = [k for k in keys if k not in exclude]
 
     cat_forced = [k for k in include if k in keys]
+
     uniques = {k: set() for k in keys}
     has_digit = {k: False for k in keys}
-    has_alpha = {k: False for k in keys}   # track letters
+    has_alpha = {k: False for k in keys}
+    # track numeric-parse success ratio per field
+    parse_ok = {k: 0 for k in keys}
+    parse_tot = {k: 0 for k in keys}
+
     for r in rows:
         for k in keys:
             v = r.get(k)
-            if v is None: continue
+            if v is None:
+                continue
             s = _norm_str(v)
             uniques[k].add(_norm_token(s))
             if any(c.isalpha() for c in s):
                 has_alpha[k] = True
             if is_numericish(s):
                 has_digit[k] = True
+            # try parsing as numeric/range regardless of letters
+            pr = parse_numeric_or_range(s)
+            parse_tot[k] += 1
+            if pr is not None:
+                parse_ok[k] += 1
 
+    # numeric if parser succeeds often (>=60%), OR numeric-ish without letters
+    numeric_like = set()
+    for k in keys:
+        ok = parse_ok[k]; tot = max(parse_tot[k], 1)
+        if (ok / tot) >= 0.60 or (has_digit[k] and not has_alpha[k]):
+            numeric_like.add(k)
+
+    # pick categorical: low-cardinality labels that are NOT numeric_like
     categorical = list(cat_forced)
     for k in keys:
-        if k in categorical: continue
+        if k in categorical:
+            continue
         card = len(uniques[k])
-        if (min_cat_card <= card <= max(2, int(max_cat_ratio*n)) and not has_digit[k]) or has_alpha[k]:
+        if k not in numeric_like and ((min_cat_card <= card <= max(2, int(max_cat_ratio*n))) or has_alpha[k]):
             categorical.append(k)
 
-    numeric = [k for k in keys if has_digit[k] and k not in categorical]
-    categorical = categorical[:max_group_fields] if len(categorical) > max_group_fields else categorical
+    # numeric = numeric_like but not already chosen as categorical
+    numeric = [k for k in keys if k in numeric_like and k not in categorical]
+
+    # cap number of categorical group fields
+    if len(categorical) > max_group_fields:
+        categorical = categorical[:max_group_fields]
+
     return (categorical, numeric)
 
 # ====================== main distill ======================
@@ -213,12 +263,20 @@ def distill(rows: Iterable[Dict[str,Any]],
             ) -> List[Dict[str,Any]]:
     rows = list(rows or [])
     include_fields = include_fields or []
-    # FIX: default exclude IDs
+
+    # Auto-include common categorical fields if present
+    common_labels = ["department", "status", "category", "class", "label"]
+    for f in common_labels:
+        if f not in include_fields and any(f in r for r in rows):
+            include_fields.append(f)
+
+    # default exclude IDs
     default_exclude = {"id","uuid","_id"}
     if exclude_fields:
         exclude_fields = list(set(exclude_fields) | default_exclude)
     else:
         exclude_fields = list(default_exclude)
+
     count_keys = count_keys or ["count","cnt","weight","freq","frequency"]
 
     cat_fields, num_fields = infer_field_roles(
@@ -227,6 +285,7 @@ def distill(rows: Iterable[Dict[str,Any]],
         max_group_fields=max_group_fields
     )
 
+    # build KNN majority mappers per categorical field
     cat_knn: Dict[str,KNNMajority] = {}
     for cf in cat_fields:
         tokens = [(r.get(cf, ""), get_count_value(r, count_keys)) for r in rows]
@@ -234,6 +293,7 @@ def distill(rows: Iterable[Dict[str,Any]],
         km.fit(tokens)
         cat_knn[cf] = km
 
+    # learn bins for numeric fields
     bin_edges: Dict[str, List[float]] = {}
     for nf in num_fields:
         vals = []
@@ -244,20 +304,25 @@ def distill(rows: Iterable[Dict[str,Any]],
             edges = compute_bins(vals, strategy=bin_strategy, bins=bins)
             bin_edges[nf] = edges
 
+    # aggregate
     agg = defaultdict(int)
     for r in rows:
         key_parts = []
+        # categorical
         for cf in cat_fields:
             key_parts.append((cf, cat_knn[cf].predict(r.get(cf))))
+        # numeric -> binned label
         for nf in num_fields:
             pr = parse_numeric_or_range(r.get(nf))
             if pr and nf in bin_edges:
                 mid = (pr[0]+pr[1])/2.0
                 key_parts.append((nf, label_bin(mid, bin_edges[nf])))
-        if not key_parts: continue
+        if not key_parts:
+            continue
         cnt = get_count_value(r, count_keys)
         agg[tuple(key_parts)] += cnt
 
+    # emit rows as dicts; keep order: categorical first, numeric next
     out = []
     for kp, cnt in agg.items():
         d = {}
