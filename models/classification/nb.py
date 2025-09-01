@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Tuple, Optional, Union
 
 Number = Union[int, float]
 
-# ---------- utils: flatten + numeric helpers ----------
+# ---------- utils ----------
 def _is_number_like(x: Any) -> bool:
     if isinstance(x, (int, float)) and not isinstance(x, bool):
         return True
@@ -35,7 +35,7 @@ def _flatten(prefix: str, value: Any, out: Dict[str, Any]) -> None:
         for i, v in enumerate(value):
             _flatten(f"{prefix}[{i}]" if prefix else f"[{i}]", v, out)
     else:
-        if prefix:  # ignore empty top-level if someone passes a scalar
+        if prefix:
             out[prefix] = value
 
 def flatten_json(obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -45,26 +45,16 @@ def flatten_json(obj: Dict[str, Any]) -> Dict[str, Any]:
 
 # ---------- model ----------
 class NaiveBayesJSON:
-    """
-    General Naive Bayes for arbitrary JSON records.
-    - Auto-detects feature types (numeric/categorical)
-    - Categorical: Laplace smoothing
-    - Numeric: Gaussian likelihood with variance floor
-    - Supports per-sample weights
-    """
     def __init__(self, laplace: float = 1.0, var_floor: float = 1e-9):
         self.laplace = laplace
         self.var_floor = var_floor
         self.classes_: List[Any] = []
         self.class_weight_: Counter = Counter()
         self.n_weight_: float = 0.0
-
-        self.feature_types_: Dict[str, str] = {}  # 'categorical' | 'numeric'
+        self.feature_types_: Dict[str, str] = {}
         self.cat_counts_: Dict[str, Dict[Any, Counter]] = defaultdict(lambda: defaultdict(Counter))
         self.cat_totals_: Dict[str, Dict[Any, float]] = defaultdict(lambda: defaultdict(float))
         self.cat_cardinality_: Dict[str, int] = {}
-
-        # numeric params: feature -> class -> (mean, var, weight_sum)
         self.num_params_: Dict[str, Dict[Any, Tuple[float, float, float]]] = defaultdict(dict)
         self.log_priors_: Dict[Any, float] = {}
         self._feat_numeric_votes_: Counter = Counter()
@@ -90,7 +80,6 @@ class NaiveBayesJSON:
 
         flat_X = [flatten_json(rec) for rec in X]
 
-        # vote feature types
         for feat_row in flat_X:
             for k, v in feat_row.items():
                 self._feat_total_votes_[k] += 1
@@ -98,20 +87,18 @@ class NaiveBayesJSON:
                     self._feat_numeric_votes_[k] += 1
         self._decide_feature_types()
 
-        # accumulate per-class stats
         num_stats: Dict[str, Dict[Any, List[float]]] = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0, 0.0]))
         cat_vocab: Dict[str, set] = defaultdict(set)
 
         for feat_row, cls, w in zip(flat_X, y, sample_weight):
             self.class_weight_[cls] += w
             self.n_weight_ += w
-
             for k, v in feat_row.items():
                 if self.feature_types_[k] == 'numeric':
                     val = _to_number(v)
                     if val is None:
                         continue
-                    s = num_stats[k][cls]  # [sum, sumsq, wsum]
+                    s = num_stats[k][cls]
                     s[0] += w * val
                     s[1] += w * (val * val)
                     s[2] += w
@@ -121,9 +108,12 @@ class NaiveBayesJSON:
                     self.cat_totals_[k][cls] += w
                     cat_vocab[k].add(sval)
 
-        # finalize
         self.classes_ = list(self.class_weight_.keys())
-        self.log_priors_ = {c: math.log(self.class_weight_[c] / self.n_weight_) for c in self.classes_}
+        if self.n_weight_ <= 0:
+            u = 1.0 / max(1, len(self.class_weight_))
+            self.log_priors_ = {c: math.log(u) for c in self.class_weight_.keys()}
+        else:
+            self.log_priors_ = {c: math.log(self.class_weight_[c] / self.n_weight_) for c in self.class_weight_.keys()}
 
         for feat, by_class in num_stats.items():
             for cls, (sum_, sumsq, wsum) in by_class.items():
@@ -148,10 +138,9 @@ class NaiveBayesJSON:
         for feat, ftype in self.feature_types_.items():
             if feat not in flat:
                 continue
-
             if ftype == 'numeric':
                 x = _to_number(flat[feat])
-                if x is None:  # incompatible type -> ignore
+                if x is None:
                     continue
                 for c in self.classes_:
                     params = self.num_params_.get(feat, {}).get(c)
@@ -162,18 +151,17 @@ class NaiveBayesJSON:
             else:
                 sval = str(flat[feat])
                 V = self.cat_cardinality_.get(feat, 1)
+                alpha = self.laplace
                 for c in self.classes_:
                     count = self.cat_counts_[feat][c][sval]
                     total = self.cat_totals_[feat][c]
-                    # Laplace smoothing
                     if total > 0:
-                        prob = (count + 1.0) / (total + V * 1.0)
+                        prob = (count + alpha) / (total + V * alpha)
                     else:
-                        prob = 1.0 / V
+                        prob = 1.0 / max(1, V)
                     logp[c] += math.log(prob)
 
-        # normalize
-        m = max(logp.values())
+        m = max(logp.values()) if logp else 0.0
         exps = {c: math.exp(v - m) for c, v in logp.items()}
         Z = sum(exps.values()) or 1.0
         return {c: exps[c] / Z for c in self.classes_}
@@ -182,8 +170,9 @@ class NaiveBayesJSON:
         return [self.predict_proba_one(r) for r in X]
 
 # ---------- io helpers ----------
-def load_records(path: str) -> List[Dict[str, Any]]:
-    # try JSON array; fallback to JSONL
+def load_records(path: Optional[str]) -> List[Dict[str, Any]]:
+    if not path:
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -199,6 +188,29 @@ def load_records(path: str) -> List[Dict[str, Any]]:
                     recs.append(json.loads(line))
         return recs
 
+def _choose_auto_target(rows: List[Dict[str, Any]], weight_key: Optional[str]) -> Optional[str]:
+    if not rows:
+        return None
+    candidates = {}
+    for k in rows[0].keys():
+        if k == weight_key:
+            continue
+        vals = []
+        for r in rows:
+            if k not in r:
+                continue
+            v = r[k]
+            if _is_number_like(v):
+                vals = None
+                break
+            vals.append(str(v))
+        if vals is None or not vals:
+            continue
+        candidates[k] = len(set(vals))
+    if not candidates:
+        return None
+    return sorted(candidates.items(), key=lambda kv: kv[1])[0][0]
+
 # ---------- CLI ----------
 def main():
     ap = argparse.ArgumentParser(
@@ -206,10 +218,14 @@ def main():
     )
     ap.add_argument("train", help="Training JSON/JSONL (list of objects)")
     ap.add_argument("predict", nargs="?", help="Prediction JSON/JSONL (optional; defaults to training set)")
-    ap.add_argument("--target", default="target", help="Name of label field in records (default: target)")
+    ap.add_argument("--target", default=None, help="Name of label field in records (default: none; see --auto_target)")
+    ap.add_argument("--auto_target", action="store_true",
+                    help="If set and --target is omitted, auto-pick a categorical field as label.")
     ap.add_argument("--weight", default=None, help="Optional weight field (e.g., count)")
+    ap.add_argument("--drop", nargs="*", default=[], help="Feature keys to drop from training/prediction")
     ap.add_argument("--laplace", type=float, default=1.0, help="Laplace smoothing for categorical (default 1.0)")
     ap.add_argument("--var_floor", type=float, default=1e-9, help="Variance floor for numeric (default 1e-9)")
+    ap.add_argument("--round", dest="round_nd", type=int, default=2, help="Round probabilities to N decimals (default 2)")
     args = ap.parse_args()
 
     train = load_records(args.train)
@@ -217,15 +233,25 @@ def main():
         print("[]")
         return
 
-    # labels
-    if not all(isinstance(r, dict) and (args.target in r) for r in train):
-        sys.stderr.write(f"ERROR: training records must include '{args.target}'.\n")
+    target = args.target
+    if target is None:
+        if args.auto_target:
+            target = _choose_auto_target(train, args.weight)
+        if target is None:
+            sys.stderr.write("ERROR: no --target provided and auto-detection failed.\n")
+            sys.exit(1)
+
+    if not all(isinstance(r, dict) and (target in r) for r in train):
+        sys.stderr.write(f"ERROR: training records must include '{target}'.\n")
         sys.exit(1)
 
-    y = [r[args.target] for r in train]
-    X = [{k: v for k, v in r.items() if k != args.target} for r in train]
+    drop_set = set(args.drop) | {target}
+    if args.weight:
+        drop_set.add(args.weight)
 
-    # sample weights
+    y = [r[target] for r in train]
+    X = [{k: v for k, v in r.items() if k not in drop_set} for r in train]
+
     if args.weight is not None:
         w = [float(r.get(args.weight, 1.0)) for r in train]
     else:
@@ -233,13 +259,20 @@ def main():
 
     nb = NaiveBayesJSON(laplace=args.laplace, var_floor=args.var_floor).fit(X, y, sample_weight=w)
 
-    # prediction set
-    pred_set = load_records(args.predict) if args.predict else X
+    if args.predict:
+        pred_raw = load_records(args.predict)
+        pred_set = [{k: v for k, v in r.items() if k not in drop_set} for r in pred_raw]
+    else:
+        pred_set = X
+
     probs_list = nb.predict_proba(pred_set)
 
-    # pure probabilities, one JSON per line
+    def _sorted_rounded(d: Dict[Any, float], ndigits: int) -> Dict[str, float]:
+        items = sorted(((str(k), round(v, ndigits)) for k, v in d.items()), key=lambda kv: kv[1], reverse=True)
+        return {k: v for k, v in items}
+
     for probs in probs_list:
-        print(json.dumps(probs, ensure_ascii=False))
+        print(json.dumps(_sorted_rounded(probs, args.round_nd), ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

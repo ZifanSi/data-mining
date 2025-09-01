@@ -1,0 +1,12 @@
+[
+  {"id": 1, "department": "saels", "status": "junor", "age": "31-35", "salary": "46000-50000", "count": 5},
+  {"id": 2, "department": "sales", "status": "junior", "age": "31..35", "salary": "31K..35K", "count": 40},
+  {"id": 3, "department": "salse", "status": "Junior", "age": "26..30", "salary": "26k..30K", "count": 10},
+  {"id": 4, "department": "Sales", "status": "senor", "age": "31…35", "salary": "46K..50K", "count": 30},
+  {"id": 5, "department": "systms", "status": "senior", "age": "41..45", "salary": "66K..70K", "count": 3},
+  {"id": 6, "department": "systems", "status": "junior", "age": "21..25", "salary": "46K..50K", "count": 20},
+  {"id": 7, "department": "mktg", "status": "sen1or", "age": "36..40", "salary": "46k-50k", "count": 10},
+  {"id": 8, "department": "marketing", "status": "junior", "age": "31-35yrs", "salary": "41k-45k", "count": 4},
+  {"id": 9, "department": null, "status": "jr", "age": "26..30", "salary": "26K..30K", "count": 6},
+  {"id": 10, "department": "secretary", "status": "senior", "age": "46..50", "salary": "36K..40K", "count": 4}
+]
